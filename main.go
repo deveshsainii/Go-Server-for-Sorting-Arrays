@@ -1,3 +1,4 @@
+// main.go
 package main
 
 import (
@@ -8,73 +9,82 @@ import (
 	"time"
 )
 
-type RequestPayload struct {
+type SortRequest struct {
 	ToSort [][]int `json:"to_sort"`
 }
 
-type ResponsePayload struct {
+type SortResponse struct {
 	SortedArrays [][]int `json:"sorted_arrays"`
-	TimeNS       int64   `json:"time_ns"`
+	TimeNs       int64   `json:"time_ns"`
 }
 
-func processSingle(w http.ResponseWriter, r *http.Request) {
-	var reqPayload RequestPayload
-	if err := json.NewDecoder(r.Body).Decode(&reqPayload); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
+func sortSequential(input [][]int) ([][]int, int64) {
 	startTime := time.Now()
-	sortedArrays := make([][]int, len(reqPayload.ToSort))
-	for i, arr := range reqPayload.ToSort {
-		sort.Ints(arr)
-		sortedArrays[i] = arr
-	}
-	timeTaken := time.Since(startTime).Nanoseconds()
 
-	response := ResponsePayload{
-		SortedArrays: sortedArrays,
-		TimeNS:       timeTaken,
+	for i := range input {
+		sort.Ints(input[i])
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	return input, time.Since(startTime).Nanoseconds()
 }
 
-func processConcurrent(w http.ResponseWriter, r *http.Request) {
-	var reqPayload RequestPayload
-	if err := json.NewDecoder(r.Body).Decode(&reqPayload); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
+func sortConcurrent(input [][]int) ([][]int, int64) {
 	startTime := time.Now()
+
 	var wg sync.WaitGroup
-	sortedArrays := make([][]int, len(reqPayload.ToSort))
-	for i, arr := range reqPayload.ToSort {
-		wg.Add(1)
-		go func(i int, arr []int) {
-			defer wg.Done()
-			sort.Ints(arr)
-			sortedArrays[i] = arr
-		}(i, arr)
-	}
-	wg.Wait()
-	timeTaken := time.Since(startTime).Nanoseconds()
+	wg.Add(len(input))
 
-	response := ResponsePayload{
+	for i := range input {
+		go func(i int) {
+			defer wg.Done()
+			sort.Ints(input[i])
+		}(i)
+	}
+
+	wg.Wait()
+
+	return input, time.Since(startTime).Nanoseconds()
+}
+
+func processSingleHandler(w http.ResponseWriter, r *http.Request) {
+	var req SortRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	sortedArrays, timeNs := sortSequential(req.ToSort)
+
+	res := SortResponse{
 		SortedArrays: sortedArrays,
-		TimeNS:       timeTaken,
+		TimeNs:       timeNs,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(res)
+}
+
+func processConcurrentHandler(w http.ResponseWriter, r *http.Request) {
+	var req SortRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	sortedArrays, timeNs := sortConcurrent(req.ToSort)
+
+	res := SortResponse{
+		SortedArrays: sortedArrays,
+		TimeNs:       timeNs,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
 }
 
 func main() {
-	http.HandleFunc("/process-single", processSingle)
-	http.HandleFunc("/process-concurrent", processConcurrent)
+	http.HandleFunc("/process-single", processSingleHandler)
+	http.HandleFunc("/process-concurrent", processConcurrentHandler)
 
-	port := ":8000"
-	http.ListenAndServe(port, nil)
+	http.ListenAndServe(":8000", nil)
 }
